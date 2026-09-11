@@ -42,7 +42,7 @@ div.stButton > button, div.stDownloadButton > button {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Prototype v0.3.1 · Target species (light)</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Prototype v0.3.2 · Nachtvlinder targets</span>', unsafe_allow_html=True)
 st.title("🦋 Mijn Nachtvlinders")
 st.caption(
     "Analyseer moth-trap tellingen uit ButterflyCount/eBMS binnen je eigen getekende gebied."
@@ -181,6 +181,7 @@ def fetch_inat_lepidoptera(swlat, swlng, nelat, nelng, d1, d2, research_only, ma
     """
     base = {
         "taxon_id": 47157,
+        "without_taxon_id": 47224,  # Papilionoidea = dagvlinders; uitsluiten voor nachtvlinders
         "rank": "species",
         "geo": "true",
         "swlat": swlat,
@@ -688,7 +689,7 @@ with tab_dashboard:
     elif overview == "🎯 Target species":
         st.subheader("🎯 Target species")
         st.write(
-            "Zoek naar **Lepidoptera-soorten die nog niet in jouw ButterflyCount-data "
+            "Zoek naar **nachtvlinders (Lepidoptera zonder Papilionoidea) die nog niet in jouw ButterflyCount-data "
             "binnen dit gebied voorkomen**, maar die op iNaturalist wel vlak buiten het gebied zijn waargenomen."
         )
         st.caption(
@@ -734,7 +735,7 @@ with tab_dashboard:
             all_inside = in_polygon(st.session_state.occ_df, geom)
             seen_species = set(all_inside["soort"].dropna().astype(str))
 
-            with st.spinner("iNaturalist-observaties rond het gebied ophalen… Dit kan bij veel waarnemingen even duren."):
+            with st.spinner("iNaturalist-nachtvlinderwaarnemingen rond het gebied ophalen… Dit kan bij veel waarnemingen even duren."):
                 try:
                     results, total = fetch_inat_lepidoptera(
                         round(bbox["swlat"], 6),
@@ -894,7 +895,7 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders v0.3.1 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders v0.3.2 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )
