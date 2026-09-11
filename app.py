@@ -1,7 +1,11 @@
-from datetime import date
+from datetime import date, timedelta
 import io
 import json
+import math
+import time
 import zipfile
+
+import requests
 
 import folium
 import pandas as pd
@@ -9,6 +13,7 @@ import plotly.express as px
 import streamlit as st
 from folium.plugins import Draw, HeatMap
 from shapely.geometry import Point, shape
+from shapely import affinity
 from streamlit_folium import st_folium
 
 st.set_page_config(
@@ -37,7 +42,7 @@ div.stButton > button, div.stDownloadButton > button {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Prototype v0.2 · Moth traps</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Prototype v0.3 · Moth traps + Target species</span>', unsafe_allow_html=True)
 st.title("🦋 Mijn Nachtvlinders")
 st.caption(
     "Analyseer moth-trap tellingen uit ButterflyCount/eBMS binnen je eigen getekende gebied."
@@ -51,6 +56,12 @@ if "occ_df" not in st.session_state:
     st.session_state.occ_df = None
 if "sample_df" not in st.session_state:
     st.session_state.sample_df = None
+if "target_df" not in st.session_state:
+    st.session_state.target_df = None
+if "target_meta" not in st.session_state:
+    st.session_state.target_meta = {}
+if "selected_targets" not in st.session_state:
+    st.session_state.selected_targets = []
 
 def parse_coord(v):
     if pd.isna(v):
@@ -112,6 +123,156 @@ def in_polygon(df, geom):
         else:
             mask.append(poly.covers(Point(float(r["lon"]), float(r["lat"]))))
     return df.loc[mask].copy()
+
+
+def expanded_bbox(geom, radius_km):
+    """Bounding box around the polygon plus an approximate radius in kilometres."""
+    poly = shape(geom)
+    minx, miny, maxx, maxy = poly.bounds
+    mid_lat = (miny + maxy) / 2
+    lat_pad = radius_km / 110.574
+    lon_scale = max(111.320 * math.cos(math.radians(mid_lat)), 1e-6)
+    lon_pad = radius_km / lon_scale
+    return {
+        "swlat": miny - lat_pad,
+        "swlng": minx - lon_pad,
+        "nelat": maxy + lat_pad,
+        "nelng": maxx + lon_pad,
+    }
+
+def distance_to_area_km(lon, lat, geom):
+    """
+    Approximate shortest distance to the polygon in km.
+    For Dutch-scale searches this local longitude correction is sufficiently accurate
+    for a 5–50 km target-species screening.
+    """
+    poly = shape(geom)
+    pt = Point(float(lon), float(lat))
+    if poly.covers(pt):
+        return 0.0
+    c = poly.centroid
+    xfactor = max(math.cos(math.radians(c.y)), 1e-6)
+    scaled_poly = affinity.scale(poly, xfact=xfactor, yfact=1.0, origin=(c.x, c.y))
+    scaled_pt = affinity.scale(pt, xfact=xfactor, yfact=1.0, origin=(c.x, c.y))
+    return float(scaled_poly.distance(scaled_pt) * 111.32)
+
+def _inat_get(params):
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mijn-Nachtvlinders-Streamlit/0.3"
+    }
+    r = requests.get(
+        "https://api.inaturalist.org/v1/observations",
+        params=params,
+        headers=headers,
+        timeout=30,
+    )
+    if r.status_code == 429:
+        raise RuntimeError("iNaturalist vraagt om langzamer te zoeken (HTTP 429). Probeer het over een minuut opnieuw.")
+    r.raise_for_status()
+    return r.json()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_inat_lepidoptera(swlat, swlng, nelat, nelng, d1, d2, research_only, max_records=10000):
+    """
+    Haal iNaturalist-observaties op met maximaal 200 per request.
+    We wachten ca. 1 seconde tussen pagina's conform de aanbevolen API-praktijk.
+    """
+    base = {
+        "taxon_id": 47157,  # Lepidoptera
+        "rank": "species",
+        "geo": "true",
+        "swlat": swlat,
+        "swlng": swlng,
+        "nelat": nelat,
+        "nelng": nelng,
+        "d1": d1,
+        "d2": d2,
+        "per_page": 200,
+        "order_by": "observed_on",
+        "order": "desc",
+    }
+    if research_only:
+        base["quality_grade"] = "research"
+
+    first = _inat_get({**base, "page": 1})
+    total = int(first.get("total_results") or 0)
+    target = min(total, max_records)
+    results = list(first.get("results") or [])
+    pages = max(1, math.ceil(target / 200))
+
+    for page in range(2, pages + 1):
+        time.sleep(1.0)
+        data = _inat_get({**base, "page": page})
+        batch = data.get("results") or []
+        if not batch:
+            break
+        results.extend(batch)
+        if len(results) >= target:
+            break
+
+    return results[:target], total
+
+def target_species_from_inat(results, geom, radius_km, butterflycount_seen):
+    rows = []
+    seen_norm = {str(x).strip().casefold() for x in butterflycount_seen if pd.notna(x)}
+
+    for obs in results:
+        taxon = obs.get("taxon") or {}
+        if taxon.get("rank") != "species":
+            continue
+        scientific = (taxon.get("name") or "").strip()
+        if not scientific or scientific.casefold() in seen_norm:
+            continue
+
+        gj = obs.get("geojson") or {}
+        coords = gj.get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        try:
+            lon, lat = float(coords[0]), float(coords[1])
+        except Exception:
+            continue
+
+        dist = distance_to_area_km(lon, lat, geom)
+        if dist <= 0 or dist > radius_km:
+            continue
+
+        rows.append({
+            "soort": scientific,
+            "common_name": taxon.get("preferred_common_name") or "",
+            "afstand_km": dist,
+            "observed_on": pd.to_datetime(obs.get("observed_on"), errors="coerce"),
+            "observation_id": obs.get("id"),
+            "lat": lat,
+            "lon": lon,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=[
+            "soort", "common_name", "waarnemingen", "afstand_km",
+            "laatste_waarneming", "nearest_observation_id", "nearest_lat", "nearest_lon"
+        ])
+
+    raw = pd.DataFrame(rows)
+    nearest_idx = raw.groupby("soort")["afstand_km"].idxmin()
+    nearest = raw.loc[nearest_idx, ["soort", "observation_id", "lat", "lon"]].rename(columns={
+        "observation_id": "nearest_observation_id",
+        "lat": "nearest_lat",
+        "lon": "nearest_lon",
+    })
+    summary = (
+        raw.groupby(["soort", "common_name"], dropna=False)
+        .agg(
+            waarnemingen=("observation_id", "nunique"),
+            afstand_km=("afstand_km", "min"),
+            laatste_waarneming=("observed_on", "max"),
+        )
+        .reset_index()
+        .merge(nearest, on="soort", how="left")
+        .sort_values(["afstand_km", "waarnemingen"], ascending=[True, False])
+    )
+    return summary
 
 tab_area, tab_data, tab_dashboard = st.tabs(["🗺️ Gebied", "📥 Data", "📊 Dashboard"])
 
@@ -303,6 +464,7 @@ with tab_dashboard:
             "Vangst per telling",
             "Heatmap",
             "Nieuwe soorten",
+            "🎯 Target species",
         ]
     )
 
@@ -495,8 +657,217 @@ with tab_dashboard:
         st.plotly_chart(px.bar(counts, x="periode", y="nieuwe soorten"), use_container_width=True)
         st.dataframe(first, use_container_width=True, hide_index=True)
 
+
+    elif overview == "🎯 Target species":
+        st.subheader("🎯 Target species")
+        st.write(
+            "Zoek naar **Lepidoptera-soorten die nog niet in jouw ButterflyCount-data "
+            "binnen dit gebied voorkomen**, maar die op iNaturalist wel vlak buiten het gebied zijn waargenomen."
+        )
+        st.caption(
+            "De afstand wordt gemeten vanaf de waarneming tot de rand van het getekende gebied, "
+            "dus niet vanaf het middelpunt. Standaard wordt 25 km gebruikt."
+        )
+
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            target_radius = st.selectbox(
+                "Maximale afstand",
+                [5, 10, 25, 50],
+                index=2,
+                format_func=lambda x: f"{x} km",
+            )
+        with s2:
+            lookback_years = st.selectbox(
+                "iNaturalist-periode",
+                [1, 3, 5, 10],
+                index=1,
+                format_func=lambda x: f"afgelopen {x} jaar",
+            )
+        with s3:
+            min_nearby = st.selectbox(
+                "Minimaal aantal nabije waarnemingen",
+                [1, 2, 3, 5, 10],
+                index=2,
+            )
+
+        research_only = st.checkbox("Alleen Research Grade iNaturalist-waarnemingen", value=True)
+        st.caption(
+            "Tip: een minimum van 3 of 5 waarnemingen voorkomt dat één verdwaalde of foutieve melding "
+            "meteen als target verschijnt."
+        )
+
+        if st.button("🔎 Zoek target species", type="primary"):
+            bbox = expanded_bbox(geom, target_radius)
+            d2_inat = date.today()
+            d1_inat = d2_inat - timedelta(days=365 * lookback_years)
+
+            # 'Niet in gebied gezien' baseren we bewust op alle geüploade ButterflyCount-jaren,
+            # niet alleen op de momenteel gekozen dashboardperiode.
+            all_inside = in_polygon(st.session_state.occ_df, geom)
+            seen_species = set(all_inside["soort"].dropna().astype(str))
+
+            with st.spinner("iNaturalist-observaties rond het gebied ophalen… Dit kan bij veel waarnemingen even duren."):
+                try:
+                    results, total = fetch_inat_lepidoptera(
+                        round(bbox["swlat"], 6),
+                        round(bbox["swlng"], 6),
+                        round(bbox["nelat"], 6),
+                        round(bbox["nelng"], 6),
+                        d1_inat.isoformat(),
+                        d2_inat.isoformat(),
+                        research_only,
+                        10000,
+                    )
+                    targets = target_species_from_inat(
+                        results,
+                        geom,
+                        float(target_radius),
+                        seen_species,
+                    )
+                    st.session_state.target_df = targets
+                    st.session_state.target_meta = {
+                        "radius": target_radius,
+                        "years": lookback_years,
+                        "research_only": research_only,
+                        "api_total": total,
+                        "downloaded": len(results),
+                        "seen_inside": len(seen_species),
+                    }
+                    st.session_state.selected_targets = []
+                except Exception as e:
+                    st.error(f"Target species konden niet worden opgehaald: {e}")
+
+        target_df = st.session_state.target_df
+        meta = st.session_state.target_meta or {}
+
+        if target_df is None:
+            st.info("Kies de instellingen en tik op **Zoek target species**.")
+        else:
+            shown = target_df[target_df["waarnemingen"] >= min_nearby].copy()
+
+            if meta.get("api_total", 0) > meta.get("downloaded", 0):
+                st.warning(
+                    f"iNaturalist vond {meta['api_total']:,} waarnemingen in het zoekvenster. "
+                    f"De app analyseerde de eerste {meta['downloaded']:,}. "
+                    "De targetlijst kan daardoor onvolledig zijn; kies eventueel een kortere periode of kleinere afstand."
+                )
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Target-kandidaten", len(shown))
+            m2.metric("ButterflyCount-soorten al in gebied", meta.get("seen_inside", 0))
+            if not shown.empty:
+                m3.metric("Dichtstbijzijnde target", f"{shown['afstand_km'].min():.1f} km")
+            else:
+                m3.metric("Dichtstbijzijnde target", "—")
+
+            if shown.empty:
+                st.info("Geen target species gevonden met deze instellingen.")
+            else:
+                display = shown.copy()
+                display["afstand_km"] = display["afstand_km"].round(1)
+                display["laatste_waarneming"] = pd.to_datetime(
+                    display["laatste_waarneming"], errors="coerce"
+                ).dt.strftime("%d-%m-%Y")
+
+                def target_label(r):
+                    common = f" · {r['common_name']}" if r["common_name"] else ""
+                    return f"{r['soort']}{common} — {r['afstand_km']:.1f} km ({int(r['waarnemingen'])} waarn.)"
+
+                options = {
+                    target_label(r): r["soort"]
+                    for _, r in shown.iterrows()
+                }
+                selected_labels = st.multiselect(
+                    "Kies jouw target species",
+                    options=list(options.keys()),
+                    default=[
+                        lab for lab, species in options.items()
+                        if species in st.session_state.selected_targets
+                    ],
+                )
+                st.session_state.selected_targets = [options[x] for x in selected_labels]
+
+                table = display[[
+                    "soort", "common_name", "afstand_km",
+                    "waarnemingen", "laatste_waarneming"
+                ]].rename(columns={
+                    "soort": "Wetenschappelijke naam",
+                    "common_name": "Algemene naam iNaturalist",
+                    "afstand_km": "Dichtstbij (km)",
+                    "waarnemingen": "Waarnemingen",
+                    "laatste_waarneming": "Laatste waarneming",
+                })
+                st.dataframe(table, use_container_width=True, hide_index=True)
+
+                st.markdown("#### Kaart target species")
+                poly = shape(geom)
+                tm = folium.Map(
+                    location=[poly.centroid.y, poly.centroid.x],
+                    zoom_start=10,
+                    tiles="OpenStreetMap",
+                    control_scale=True,
+                )
+                folium.GeoJson(
+                    geom,
+                    name="Onderzoeksgebied",
+                    style_function=lambda _: {"weight": 3, "fillOpacity": 0.08},
+                ).add_to(tm)
+
+                map_rows = shown
+                if st.session_state.selected_targets:
+                    map_rows = shown[
+                        shown["soort"].isin(st.session_state.selected_targets)
+                    ]
+
+                for _, r in map_rows.head(150).iterrows():
+                    common = f"<br>{r['common_name']}" if r["common_name"] else ""
+                    obs_url = f"https://www.inaturalist.org/observations/{int(r['nearest_observation_id'])}"
+                    popup = (
+                        f"<b>{r['soort']}</b>{common}<br>"
+                        f"Afstand tot gebied: <b>{r['afstand_km']:.1f} km</b><br>"
+                        f"Nabije waarnemingen: {int(r['waarnemingen'])}<br>"
+                        f"<a href='{obs_url}' target='_blank'>Open dichtstbijzijnde iNaturalist-waarneming</a>"
+                    )
+                    folium.CircleMarker(
+                        location=[float(r["nearest_lat"]), float(r["nearest_lon"])],
+                        radius=7,
+                        fill=True,
+                        fill_opacity=0.75,
+                        weight=2,
+                        tooltip=f"{r['soort']} · {r['afstand_km']:.1f} km",
+                        popup=folium.Popup(popup, max_width=340),
+                    ).add_to(tm)
+
+                bbox_map = expanded_bbox(geom, min(float(target_radius), 25.0))
+                tm.fit_bounds([
+                    [bbox_map["swlat"], bbox_map["swlng"]],
+                    [bbox_map["nelat"], bbox_map["nelng"]],
+                ])
+                st_folium(
+                    tm,
+                    height=560,
+                    use_container_width=True,
+                    key="target_species_map",
+                    returned_objects=[],
+                )
+
+                if st.session_state.selected_targets:
+                    chosen = shown[
+                        shown["soort"].isin(st.session_state.selected_targets)
+                    ].copy()
+                    chosen["afstand_km"] = chosen["afstand_km"].round(1)
+                    csv = chosen.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "⬇️ Geselecteerde target species als CSV",
+                        csv,
+                        "target_species.csv",
+                        "text/csv",
+                    )
+
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders v0.2 · ButterflyCount/eBMS moth-trap exports · "
-    "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt."
+    "Mijn Nachtvlinders v0.3 · ButterflyCount/eBMS moth-trap exports · "
+    "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
+"Target species gebruikt de openbare iNaturalist API."
 )
