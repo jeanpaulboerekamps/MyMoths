@@ -42,7 +42,7 @@ div.stButton > button, div.stDownloadButton > button {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Prototype v0.3 · Moth traps + Target species</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Prototype v0.3.1 · Target species (light)</span>', unsafe_allow_html=True)
 st.title("🦋 Mijn Nachtvlinders")
 st.caption(
     "Analyseer moth-trap tellingen uit ButterflyCount/eBMS binnen je eigen getekende gebied."
@@ -173,13 +173,14 @@ def _inat_get(params):
     return r.json()
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_inat_lepidoptera(swlat, swlng, nelat, nelng, d1, d2, research_only, max_records=10000):
+def fetch_inat_lepidoptera(swlat, swlng, nelat, nelng, d1, d2, research_only, max_records=3000):
     """
-    Haal iNaturalist-observaties op met maximaal 200 per request.
-    We wachten ca. 1 seconde tussen pagina's conform de aanbevolen API-praktijk.
+    Lichte iNaturalist-ophaalroutine.
+    Alleen compacte velden worden bewaard; geen foto's, sounds, annotations, etc.
+    Daardoor blijft het geheugenverbruik laag op Streamlit Community Cloud.
     """
     base = {
-        "taxon_id": 47157,  # Lepidoptera
+        "taxon_id": 47157,
         "rank": "species",
         "geo": "true",
         "swlat": swlat,
@@ -195,52 +196,78 @@ def fetch_inat_lepidoptera(swlat, swlng, nelat, nelng, d1, d2, research_only, ma
     if research_only:
         base["quality_grade"] = "research"
 
-    first = _inat_get({**base, "page": 1})
-    total = int(first.get("total_results") or 0)
-    target = min(total, max_records)
-    results = list(first.get("results") or [])
-    pages = max(1, math.ceil(target / 200))
+    compact = []
+    total = 0
+    page = 1
 
-    for page in range(2, pages + 1):
-        time.sleep(1.0)
+    while len(compact) < max_records:
         data = _inat_get({**base, "page": page})
+        if page == 1:
+            total = int(data.get("total_results") or 0)
+
         batch = data.get("results") or []
         if not batch:
             break
-        results.extend(batch)
-        if len(results) >= target:
+
+        for obs in batch:
+            taxon = obs.get("taxon") or {}
+            gj = obs.get("geojson") or {}
+            coords = gj.get("coordinates") or []
+            if taxon.get("rank") != "species" or len(coords) < 2:
+                continue
+            compact.append({
+                "id": obs.get("id"),
+                "observed_on": obs.get("observed_on"),
+                "taxon_id": taxon.get("id"),
+                "taxon_name": taxon.get("name"),
+                "common_name": taxon.get("preferred_common_name") or "",
+                "lon": coords[0],
+                "lat": coords[1],
+            })
+            if len(compact) >= max_records:
+                break
+
+        if len(batch) < 200 or len(compact) >= min(total, max_records):
             break
 
-    return results[:target], total
+        page += 1
+        time.sleep(1.0)
+
+        # Hard safety guard: never paginate beyond 50 pages.
+        if page > 50:
+            break
+
+    return compact, total
 
 def target_species_from_inat(results, geom, radius_km, butterflycount_seen):
     rows = []
     seen_norm = {str(x).strip().casefold() for x in butterflycount_seen if pd.notna(x)}
 
+    # Cache distances per coordinate tuple during this run.
+    distance_cache = {}
+
     for obs in results:
-        taxon = obs.get("taxon") or {}
-        if taxon.get("rank") != "species":
-            continue
-        scientific = (taxon.get("name") or "").strip()
+        scientific = str(obs.get("taxon_name") or "").strip()
         if not scientific or scientific.casefold() in seen_norm:
             continue
 
-        gj = obs.get("geojson") or {}
-        coords = gj.get("coordinates") or []
-        if len(coords) < 2:
-            continue
         try:
-            lon, lat = float(coords[0]), float(coords[1])
+            lon = float(obs.get("lon"))
+            lat = float(obs.get("lat"))
         except Exception:
             continue
 
-        dist = distance_to_area_km(lon, lat, geom)
+        key = (round(lon, 6), round(lat, 6))
+        if key not in distance_cache:
+            distance_cache[key] = distance_to_area_km(lon, lat, geom)
+        dist = distance_cache[key]
+
         if dist <= 0 or dist > radius_km:
             continue
 
         rows.append({
             "soort": scientific,
-            "common_name": taxon.get("preferred_common_name") or "",
+            "common_name": obs.get("common_name") or "",
             "afstand_km": dist,
             "observed_on": pd.to_datetime(obs.get("observed_on"), errors="coerce"),
             "observation_id": obs.get("id"),
@@ -325,7 +352,7 @@ with tab_area:
         edit_options={"edit": True, "remove": True},
     ).add_to(m)
 
-    state = st_folium(m, height=540, use_container_width=True, key="moth_area_map")
+    state = st_folium(m, height=540, width='stretch', key="moth_area_map")
     drawings = state.get("all_drawings") or []
     newest = drawings[-1].get("geometry") if drawings else None
 
@@ -486,7 +513,7 @@ with tab_dashboard:
             .sort_values("aantal", ascending=False)
             .head(20)
         )
-        st.dataframe(top, use_container_width=True, hide_index=True)
+        st.dataframe(top, width='stretch', hide_index=True)
 
     elif overview == "Soorten":
         st.subheader("Meest gevangen soorten")
@@ -498,13 +525,13 @@ with tab_dashboard:
         )
         fig = px.bar(sp, x="soort", y="aantal")
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     elif overview == "Families":
         st.subheader("Verdeling over families")
         fam = occ.groupby("familie")["aantal"].sum().sort_values(ascending=False).reset_index()
         fig = px.pie(fam, names="familie", values="aantal", hole=.35)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     elif overview == "Per maand":
         st.subheader("Gemiddeld per kalendermaand")
@@ -517,7 +544,7 @@ with tab_dashboard:
         names = {1:"Jan",2:"Feb",3:"Mrt",4:"Apr",5:"Mei",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Okt",11:"Nov",12:"Dec"}
         avg["maandnaam"] = avg["maand"].map(names)
         fig = px.bar(avg, x="maandnaam", y=["individuen","soorten"], barmode="group")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     elif overview == "Per jaar":
         st.subheader("Ontwikkeling per jaar")
@@ -527,7 +554,7 @@ with tab_dashboard:
             .reset_index()
         )
         fig = px.bar(yearly, x="jaar", y=["individuen","soorten"], barmode="group")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     elif overview == "Vangst per telling":
         st.subheader("Vangst per moth-trap telling")
@@ -542,8 +569,8 @@ with tab_dashboard:
             merged, x="datum", y="individuen", size="soorten",
             hover_data=["Location","soorten"]
         )
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(merged.sort_values("datum", ascending=False), use_container_width=True, hide_index=True)
+        st.plotly_chart(fig, width='stretch')
+        st.dataframe(merged.sort_values("datum", ascending=False), width='stretch', hide_index=True)
 
     elif overview == "Heatmap":
         st.subheader("Meetlocaties in het gebied")
@@ -619,7 +646,7 @@ with tab_dashboard:
         st_folium(
             hm,
             height=540,
-            use_container_width=True,
+            width='stretch',
             key="moth_locations_map",
             returned_objects=[],
         )
@@ -636,7 +663,7 @@ with tab_dashboard:
             })
             st.dataframe(
                 table[["Locatie", "Aantal metingen", "Eerste meting", "Laatste meting"]],
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
         else:
@@ -654,8 +681,8 @@ with tab_dashboard:
         first["kwartaal"] = first["datum"].dt.quarter
         counts = first.groupby(["jaar","kwartaal"]).size().reset_index(name="nieuwe soorten")
         counts["periode"] = counts["jaar"].astype(str) + " Q" + counts["kwartaal"].astype(str)
-        st.plotly_chart(px.bar(counts, x="periode", y="nieuwe soorten"), use_container_width=True)
-        st.dataframe(first, use_container_width=True, hide_index=True)
+        st.plotly_chart(px.bar(counts, x="periode", y="nieuwe soorten"), width='stretch')
+        st.dataframe(first, width='stretch', hide_index=True)
 
 
     elif overview == "🎯 Target species":
@@ -717,7 +744,7 @@ with tab_dashboard:
                         d1_inat.isoformat(),
                         d2_inat.isoformat(),
                         research_only,
-                        10000,
+                        3000,
                     )
                     targets = target_species_from_inat(
                         results,
@@ -749,7 +776,7 @@ with tab_dashboard:
             if meta.get("api_total", 0) > meta.get("downloaded", 0):
                 st.warning(
                     f"iNaturalist vond {meta['api_total']:,} waarnemingen in het zoekvenster. "
-                    f"De app analyseerde de eerste {meta['downloaded']:,}. "
+                    f"De app analyseerde maximaal {meta['downloaded']:,} compacte waarnemingen. "
                     "De targetlijst kan daardoor onvolledig zijn; kies eventueel een kortere periode of kleinere afstand."
                 )
 
@@ -798,7 +825,7 @@ with tab_dashboard:
                     "waarnemingen": "Waarnemingen",
                     "laatste_waarneming": "Laatste waarneming",
                 })
-                st.dataframe(table, use_container_width=True, hide_index=True)
+                st.dataframe(table, width='stretch', hide_index=True)
 
                 st.markdown("#### Kaart target species")
                 poly = shape(geom)
@@ -867,7 +894,7 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders v0.3 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders v0.3.1 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )
