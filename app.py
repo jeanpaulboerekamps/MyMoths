@@ -37,7 +37,7 @@ div.stButton > button, div.stDownloadButton > button {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Prototype v0.1 · Moth traps</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Prototype v0.2 · Moth traps</span>', unsafe_allow_html=True)
 st.title("🦋 Mijn Nachtvlinders")
 st.caption(
     "Analyseer moth-trap tellingen uit ButterflyCount/eBMS binnen je eigen getekende gebied."
@@ -148,7 +148,7 @@ with tab_area:
     if st.session_state.active_area in st.session_state.areas:
         p = shape(st.session_state.areas[st.session_state.active_area])
         c = p.centroid
-        center, zoom = [c.y, c.x], 15
+        center, zoom = [c.y, c.x], 17
 
     m = folium.Map(location=center, zoom_start=zoom, tiles="OpenStreetMap", control_scale=True)
     if st.session_state.active_area in st.session_state.areas:
@@ -253,16 +253,44 @@ with tab_dashboard:
         st.warning("Geen moth-trap data gevonden binnen dit gebied.")
         st.stop()
 
-    years = sorted(set(sam["jaar"].dropna().astype(int).tolist()) | set(occ["jaar"].dropna().astype(int).tolist()))
-    if years:
-        year_range = st.slider(
-            "Periode",
-            min_value=min(years),
-            max_value=max(years),
-            value=(min(years), max(years)),
-        )
-        occ = occ[(occ["jaar"] >= year_range[0]) & (occ["jaar"] <= year_range[1])]
-        sam = sam[(sam["jaar"] >= year_range[0]) & (sam["jaar"] <= year_range[1])]
+    all_dates = pd.concat(
+        [sam["datum"].dropna(), occ["datum"].dropna()],
+        ignore_index=True,
+    )
+
+    if not all_dates.empty:
+        min_date = all_dates.min().date()
+        max_date = all_dates.max().date()
+
+        st.markdown("### Periode")
+        d1, d2 = st.columns(2)
+        with d1:
+            start_date = st.date_input(
+                "Begindatum",
+                value=min_date,
+                min_value=min_date,
+                max_value=max_date,
+            )
+        with d2:
+            end_date = st.date_input(
+                "Einddatum",
+                value=max_date,
+                min_value=min_date,
+                max_value=max_date,
+            )
+
+        if start_date > end_date:
+            st.error("De begindatum moet vóór of gelijk aan de einddatum liggen.")
+            st.stop()
+
+        occ = occ[
+            (occ["datum"].dt.date >= start_date)
+            & (occ["datum"].dt.date <= end_date)
+        ]
+        sam = sam[
+            (sam["datum"].dt.date >= start_date)
+            & (sam["datum"].dt.date <= end_date)
+        ]
 
     overview = st.selectbox(
         "Kies overzicht",
@@ -356,15 +384,101 @@ with tab_dashboard:
         st.dataframe(merged.sort_values("datum", ascending=False), use_container_width=True, hide_index=True)
 
     elif overview == "Heatmap":
-        st.subheader("Heatmap van tellingen")
+        st.subheader("Meetlocaties in het gebied")
+        st.caption(
+            "De kaart toont de vaste moth-trap locaties binnen het getekende gebied. "
+            "De grootte van de marker geeft aan hoe vaak er in de gekozen periode is gemeten. "
+            "Tik op een locatie voor het aantal metingen en de datum van de laatste meting."
+        )
+
         poly = shape(geom)
-        c = poly.centroid
-        hm = folium.Map(location=[c.y,c.x], zoom_start=13, tiles="OpenStreetMap")
-        folium.GeoJson(geom).add_to(hm)
-        heat = sam.dropna(subset=["lat","lon"])[["lat","lon"]].values.tolist()
-        if heat:
-            HeatMap(heat, radius=18, blur=14).add_to(hm)
-        st_folium(hm, height=520, use_container_width=True, key="moth_heat")
+        minx, miny, maxx, maxy = poly.bounds
+
+        location_summary = (
+            sam.dropna(subset=["lat", "lon", "datum"])
+            .groupby(["Location", "lat", "lon"], dropna=False)
+            .agg(
+                metingen=("Sample ID", "nunique"),
+                laatste_meting=("datum", "max"),
+                eerste_meting=("datum", "min"),
+            )
+            .reset_index()
+            .sort_values(["metingen", "Location"], ascending=[False, True])
+        )
+
+        hm = folium.Map(
+            location=[poly.centroid.y, poly.centroid.x],
+            zoom_start=17,
+            tiles="OpenStreetMap",
+            control_scale=True,
+        )
+
+        folium.GeoJson(
+            geom,
+            name="Onderzoeksgebied",
+            style_function=lambda _: {
+                "weight": 3,
+                "fillOpacity": 0.06,
+            },
+        ).add_to(hm)
+
+        if not location_summary.empty:
+            max_count = max(int(location_summary["metingen"].max()), 1)
+
+            for _, row in location_summary.iterrows():
+                count = int(row["metingen"])
+                radius = 7 + 13 * (count / max_count) ** 0.5
+
+                popup_html = (
+                    f"<b>{row['Location']}</b><br>"
+                    f"Metingen in periode: <b>{count}</b><br>"
+                    f"Eerste meting: {row['eerste_meting'].strftime('%d-%m-%Y')}<br>"
+                    f"Laatste meting: <b>{row['laatste_meting'].strftime('%d-%m-%Y')}</b>"
+                )
+
+                folium.CircleMarker(
+                    location=[float(row["lat"]), float(row["lon"])],
+                    radius=radius,
+                    fill=True,
+                    fill_opacity=0.65,
+                    weight=2,
+                    tooltip=f"{row['Location']} · {count} metingen",
+                    popup=folium.Popup(popup_html, max_width=320),
+                ).add_to(hm)
+
+            # Zoom exact op het getekende gebied met een kleine marge.
+            lat_pad = max((maxy - miny) * 0.08, 0.0005)
+            lon_pad = max((maxx - minx) * 0.08, 0.0005)
+            hm.fit_bounds([
+                [miny - lat_pad, minx - lon_pad],
+                [maxy + lat_pad, maxx + lon_pad],
+            ])
+
+        st_folium(
+            hm,
+            height=540,
+            use_container_width=True,
+            key="moth_locations_map",
+            returned_objects=[],
+        )
+
+        if not location_summary.empty:
+            table = location_summary.copy()
+            table["eerste_meting"] = table["eerste_meting"].dt.strftime("%d-%m-%Y")
+            table["laatste_meting"] = table["laatste_meting"].dt.strftime("%d-%m-%Y")
+            table = table.rename(columns={
+                "Location": "Locatie",
+                "metingen": "Aantal metingen",
+                "eerste_meting": "Eerste meting",
+                "laatste_meting": "Laatste meting",
+            })
+            st.dataframe(
+                table[["Locatie", "Aantal metingen", "Eerste meting", "Laatste meting"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("Geen meetlocaties gevonden binnen dit gebied en deze periode.")
 
     elif overview == "Nieuwe soorten":
         st.subheader("Nieuwe soorten door de tijd")
@@ -383,6 +497,6 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders v0.1 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders v0.2 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt."
 )
