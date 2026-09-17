@@ -36,7 +36,7 @@ page_css = """
 .stApp {
     background:
       radial-gradient(circle at 8% 0%, rgba(111,66,166,.08), transparent 28rem),
-      linear-gradient(180deg,rgba(250,249,252,.94) 0%,rgba(244,242,247,.95) 100%),
+      linear-gradient(180deg,rgba(250,249,252,.80) 0%,rgba(244,242,247,.84) 100%),
       url('data:image/jpeg;base64,__BACKGROUND_DATA__') center 36% / cover fixed no-repeat;
 }
 .block-container {padding-top: 1.25rem; padding-bottom: 4rem; max-width: 1240px;}
@@ -63,9 +63,9 @@ div.stButton > button:hover, div.stDownloadButton > button:hover {
     margin:.25rem 0 1rem 0;
 }
 .moth-hero {
-    min-height:220px; border-radius:26px; padding:1.65rem 2rem;
+    aspect-ratio:1536 / 762; min-height:0; border-radius:26px; padding:1.65rem 2rem;
     display:flex; flex-direction:column; justify-content:flex-end; overflow:hidden;
-    background-size:cover; background-position:center 46%;
+    background-size:100% 100%; background-position:center;
     box-shadow:0 20px 55px rgba(38,24,55,.18); margin-bottom:1.35rem;
 }
 .moth-hero h1 {
@@ -98,7 +98,7 @@ div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="s
 }
 @media (max-width: 768px) {
   .block-container {padding-left: .8rem; padding-right: .8rem;}
-  .moth-hero {min-height:185px; padding:1.25rem; border-radius:22px;}
+  .moth-hero {min-height:0; padding:1.25rem; border-radius:22px;}
   .moth-hero h1 {font-size:2.35rem;}
 }
 </style>
@@ -110,7 +110,7 @@ st.markdown(
     <section class="moth-hero" style="background-image:
       linear-gradient(90deg,rgba(22,15,29,.82) 0%,rgba(42,25,57,.54) 48%,rgba(20,14,24,.22) 100%),
       url('data:image/jpeg;base64,{hero_data}')">
-      <div><span class="release-badge">Publieksversie 1.3 · Nachtvlinderanalyse</span></div>
+      <div><span class="release-badge">Publieksversie 1.4 · Nachtvlinderanalyse</span></div>
       <h1>Mijn Nachtvlinders</h1>
       <p>Kies een gebied en ontdek direct wat je nachtvlinderval heeft opgeleverd.</p>
     </section>
@@ -149,6 +149,14 @@ if "selected_targets" not in st.session_state:
     st.session_state.selected_targets = []
 if "show_area_creator" not in st.session_state:
     st.session_state.show_area_creator = False
+if "show_area_picker" not in st.session_state:
+    st.session_state.show_area_picker = False
+if "show_data_picker" not in st.session_state:
+    st.session_state.show_data_picker = False
+if "area_picker_nonce" not in st.session_state:
+    st.session_state.area_picker_nonce = 0
+if "data_picker_nonce" not in st.session_state:
+    st.session_state.data_picker_nonce = 0
 if "show_help" not in st.session_state:
     st.session_state.show_help = False
 if "show_privacy" not in st.session_state:
@@ -421,17 +429,45 @@ tab_data = st.container()
 tab_dashboard = st.container()
 
 with tab_area:
-    area_pick, area_new = st.columns([3, 1])
-    with area_pick:
-        uploaded_geo = st.file_uploader(
-            "Selecteer gebied",
-            type=["geojson", "json"],
-            key="moth_area_upload_v10",
-        )
-    with area_new:
-        st.write("")
-        if st.button("➕ Nieuw gebied maken", key="new_moth_area_v10"):
-            st.session_state.show_area_creator = not st.session_state.show_area_creator
+    has_active_area = st.session_state.active_area in st.session_state.areas
+    uploaded_geo = None
+
+    if has_active_area and not st.session_state.show_area_picker:
+        area_status, area_change = st.columns([3, 1])
+        with area_status:
+            st.markdown(
+                f'<div class="active-area"><b>Actief gebied:</b> '
+                f'{html.escape(st.session_state.active_area)}</div>',
+                unsafe_allow_html=True,
+            )
+        with area_change:
+            if st.button("Ander gebied kiezen", key="change_moth_area_v14"):
+                st.session_state.show_area_picker = True
+                st.session_state.area_picker_nonce += 1
+                st.rerun()
+    else:
+        area_pick, area_new = st.columns([3, 1])
+        with area_pick:
+            uploaded_geo = st.file_uploader(
+                "Selecteer gebied",
+                type=["geojson", "json"],
+                key=f"moth_area_upload_{st.session_state.area_picker_nonce}",
+            )
+        with area_new:
+            st.write("")
+            if st.button("➕ Nieuw gebied maken", key="new_moth_area_v14"):
+                st.session_state.show_area_creator = not st.session_state.show_area_creator
+
+        if st.session_state.areas:
+            names = list(st.session_state.areas)
+            current = st.session_state.active_area if st.session_state.active_area in names else names[0]
+            chosen = st.selectbox("Beschikbare gebieden", names, index=names.index(current))
+            if chosen != st.session_state.active_area:
+                st.session_state.active_area = chosen
+            if st.button("Dit gebied gebruiken", type="primary", key="use_existing_area_v14"):
+                st.session_state.active_area = chosen
+                st.session_state.show_area_picker = False
+                st.rerun()
 
     if uploaded_geo:
         upload_key = (uploaded_geo.name, uploaded_geo.size)
@@ -448,23 +484,10 @@ with tab_area:
                 if first_name:
                     st.session_state.active_area = first_name
                     st.session_state.last_moth_area_upload = upload_key
+                    st.session_state.show_area_picker = False
                     st.rerun()
             except Exception as e:
                 st.error(f"GeoJSON kon niet worden geopend: {e}")
-
-    if st.session_state.areas:
-        names = list(st.session_state.areas)
-        current = st.session_state.active_area if st.session_state.active_area in names else names[0]
-        if len(names) > 1:
-            chosen = st.selectbox("Actief gebied", names, index=names.index(current))
-            if chosen != st.session_state.active_area:
-                st.session_state.active_area = chosen
-                st.rerun()
-        elif st.session_state.active_area:
-            st.markdown(
-                f'<div class="active-area"><b>Actief gebied:</b> {html.escape(st.session_state.active_area)}</div>',
-                unsafe_allow_html=True,
-            )
 
     if st.session_state.show_area_creator:
         with st.container(border=True):
@@ -500,15 +523,37 @@ with tab_area:
                     st.session_state.areas[area_name.strip()] = newest
                     st.session_state.active_area = area_name.strip()
                     st.session_state.show_area_creator = False
+                    st.session_state.show_area_picker = False
                     st.rerun()
 
 with tab_data:
-    uploads = st.file_uploader(
-        "ButterflyCount-bestanden (occurrences en samples)",
-        type=["zip"],
-        accept_multiple_files=True,
-        help="Selecteer de twee ZIP-bestanden uit Moth trap downloads.",
+    has_complete_data = (
+        st.session_state.occ_df is not None
+        and st.session_state.sample_df is not None
     )
+    uploads = None
+
+    if has_complete_data and not st.session_state.show_data_picker:
+        data_status, data_change = st.columns([3, 1])
+        with data_status:
+            st.markdown(
+                '<div class="active-area"><b>ButterflyCount-data:</b> '
+                'occurrences en samples geladen</div>',
+                unsafe_allow_html=True,
+            )
+        with data_change:
+            if st.button("Andere bestanden kiezen", key="change_moth_data_v14"):
+                st.session_state.show_data_picker = True
+                st.session_state.data_picker_nonce += 1
+                st.rerun()
+    else:
+        uploads = st.file_uploader(
+            "ButterflyCount-bestanden (occurrences en samples)",
+            type=["zip"],
+            accept_multiple_files=True,
+            help="Selecteer de twee ZIP-bestanden uit Moth trap downloads.",
+            key=f"moth_data_upload_{st.session_state.data_picker_nonce}",
+        )
 
     if uploads:
         data_upload_key = tuple((up.name, up.size) for up in uploads)
@@ -526,6 +571,12 @@ with tab_data:
                 except Exception as e:
                     st.error(f"{up.name}: {e}")
             st.session_state.last_moth_data_upload = data_upload_key
+            if (
+                st.session_state.occ_df is not None
+                and st.session_state.sample_df is not None
+            ):
+                st.session_state.show_data_picker = False
+                st.rerun()
 
     if st.session_state.occ_df is not None:
         occ = st.session_state.occ_df
@@ -1103,7 +1154,7 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders · Publieksversie 1.3 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders · Publieksversie 1.4 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )

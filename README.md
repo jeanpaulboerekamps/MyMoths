@@ -1,4 +1,11 @@
-# Mijn Nachtvlinders — publieksversie 1.3
+# Mijn Nachtvlinders — publieksversie 1.4
+
+## Nieuw in 1.4
+
+- De kopfoto wordt in haar volledige oorspronkelijke beeldverhouding getoond, zonder afsnijden.
+- De tweede vlinderfoto is beter zichtbaar als rustige pagina-achtergrond.
+- Na het kiezen van een gebied blijft alleen het actieve gebied met **Ander gebied kiezen** staan.
+- Na het laden van occurrences en samples verdwijnt het uploadvak en verschijnt **Andere bestanden kiezen**.
 
 ## Nieuw in 1.3
 
