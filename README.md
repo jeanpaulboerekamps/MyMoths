@@ -1,4 +1,12 @@
-# Mijn Nachtvlinders — publieksversie 1.1
+# Mijn Nachtvlinders — publieksversie 1.2
+
+## Nieuw in 1.2
+
+- De aangeleverde nachtvlinderfoto vormt de brede achtergrond van de kop.
+- Een contrastlaag houdt titel en introductie goed leesbaar op mobiel en desktop.
+- Modernere typografie, witruimte, knoppen, informatiekaarten en metrics.
+- De overzichtskeuzes staan samen in een rustige visuele kaart.
+- Upload- en resultaatblokken hebben een consistentere, zachtere vormgeving.
 
 ## Nieuw in 1.1
 

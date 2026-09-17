@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import base64
 import html
 import io
 import json
@@ -28,20 +29,58 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.block-container {padding-top: 1rem; padding-bottom: 4rem; max-width: 1200px;}
+.stApp {
+    background:
+      radial-gradient(circle at 8% 0%, rgba(111,66,166,.09), transparent 28rem),
+      linear-gradient(180deg,#faf9fc 0%,#f4f2f7 100%);
+}
+.block-container {padding-top: 1.25rem; padding-bottom: 4rem; max-width: 1240px;}
 div.stButton > button, div.stDownloadButton > button {
-    min-height: 52px; font-size: 1.02rem; border-radius: 12px; width: 100%;
+    min-height: 50px; font-size: 1.01rem; font-weight:650;
+    border-radius: 14px; width: 100%; border-color:rgba(78,54,110,.22);
+    box-shadow:0 5px 18px rgba(45,28,70,.06);
+}
+div.stButton > button:hover, div.stDownloadButton > button:hover {
+    border-color:#6f42a6; color:#56317f; transform:translateY(-1px);
 }
 [data-testid="stMetric"] {
-    padding: 12px; border: 1px solid rgba(128,128,128,.25); border-radius: 14px;
+    padding:16px 18px; border:1px solid rgba(111,66,166,.12); border-radius:18px;
+    background:rgba(255,255,255,.86); box-shadow:0 10px 30px rgba(45,28,70,.06);
 }
 .release-badge {
-    display:inline-block; padding:.25rem .65rem; border-radius:999px;
-    background:rgba(92,51,145,.12); font-weight:700; margin-bottom:.6rem;
+    display:inline-block; padding:.32rem .72rem; border-radius:999px;
+    background:rgba(255,255,255,.18); color:#fff; font-weight:750;
+    border:1px solid rgba(255,255,255,.28); backdrop-filter:blur(10px);
 }
 .active-area {
-    padding:.7rem .9rem; border-radius:14px; background:rgba(92,51,145,.08);
-    border-left:4px solid #6f42a6; margin:.2rem 0 .8rem 0;
+    padding:.82rem 1rem; border-radius:16px; background:rgba(111,66,166,.08);
+    border:1px solid rgba(111,66,166,.13); border-left:4px solid #6f42a6;
+    margin:.25rem 0 1rem 0;
+}
+.moth-hero {
+    min-height:300px; border-radius:28px; padding:2rem 2.2rem;
+    display:flex; flex-direction:column; justify-content:flex-end; overflow:hidden;
+    background-size:cover; background-position:center 48%;
+    box-shadow:0 20px 55px rgba(38,24,55,.18); margin-bottom:1.35rem;
+}
+.moth-hero h1 {
+    color:#fff; font-size:clamp(2.3rem,6vw,4.2rem); line-height:1;
+    margin:.75rem 0 .55rem 0; letter-spacing:-.045em;
+    text-shadow:0 3px 24px rgba(0,0,0,.46);
+}
+.moth-hero p {
+    color:rgba(255,255,255,.92); font-size:clamp(1rem,2vw,1.25rem);
+    margin:0; max-width:690px; text-shadow:0 2px 16px rgba(0,0,0,.55);
+}
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius:20px !important; border-color:rgba(111,66,166,.13) !important;
+    background:rgba(255,255,255,.78); box-shadow:0 12px 34px rgba(45,28,70,.055);
+}
+[data-testid="stFileUploaderDropzone"] {
+    border-radius:18px; border-color:rgba(111,66,166,.22); background:rgba(255,255,255,.72);
+}
+div[data-testid="stCheckbox"] label {
+    padding:.35rem .15rem; font-weight:600;
 }
 div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="stFileUploaderDropzone"] {
     padding:.15rem 0; border:0; background:transparent;
@@ -53,14 +92,24 @@ div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="s
 }
 @media (max-width: 768px) {
   .block-container {padding-left: .8rem; padding-right: .8rem;}
+  .moth-hero {min-height:235px; padding:1.4rem; border-radius:22px;}
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Publieksversie 1.1 · Nachtvlinderanalyse</span>', unsafe_allow_html=True)
-st.title("🦋 Mijn Nachtvlinders")
-st.caption(
-    "Kies een gebied en ontdek direct wat je nachtvlinderval heeft opgeleverd."
+hero_path = Path(__file__).with_name("assets") / "header-moth.jpeg"
+hero_data = base64.b64encode(hero_path.read_bytes()).decode("ascii")
+st.markdown(
+    f"""
+    <section class="moth-hero" style="background-image:
+      linear-gradient(90deg,rgba(22,15,29,.82) 0%,rgba(42,25,57,.54) 48%,rgba(20,14,24,.22) 100%),
+      url('data:image/jpeg;base64,{hero_data}')">
+      <div><span class="release-badge">Publieksversie 1.2 · Nachtvlinderanalyse</span></div>
+      <h1>Mijn Nachtvlinders</h1>
+      <p>Kies een gebied en ontdek direct wat je nachtvlinderval heeft opgeleverd.</p>
+    </section>
+    """,
+    unsafe_allow_html=True,
 )
 
 if "areas" not in st.session_state:
@@ -474,16 +523,18 @@ with tab_data:
 
     if st.session_state.occ_df is not None:
         occ = st.session_state.occ_df
-        st.metric("Occurrence-regels", len(occ))
-        st.caption(
+        data_left, data_right = st.columns(2)
+        data_left.metric("Occurrence-regels", len(occ))
+        data_left.caption(
             f"{occ['soort'].nunique()} soorten · "
             f"{int(occ['aantal'].sum()):,} individuen"
         )
 
     if st.session_state.sample_df is not None:
         sam = st.session_state.sample_df
-        st.metric("Moth-trap samples", len(sam))
-        st.caption(f"{sam['Location'].nunique()} locaties")
+        metric_target = data_right if st.session_state.occ_df is not None else st.container()
+        metric_target.metric("Moth-trap samples", len(sam))
+        metric_target.caption(f"{sam['Location'].nunique()} locaties")
 
 with tab_dashboard:
     if st.session_state.active_area not in st.session_state.areas:
@@ -554,7 +605,8 @@ with tab_dashboard:
             "Target species",
         ]
     selected_overviews = []
-    overview_columns = st.columns(3)
+    overview_card = st.container(border=True)
+    overview_columns = overview_card.columns(3)
     for index, option in enumerate(overview_options):
         if overview_columns[index % 3].checkbox(
             option,
@@ -564,7 +616,7 @@ with tab_dashboard:
             selected_overviews.append(option)
 
     if not selected_overviews:
-        st.info("Kies hierboven een of meer overzichten.")
+        overview_card.info("Kies een of meer overzichten.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Tellingen", sam["Sample ID"].nunique())
@@ -1045,7 +1097,7 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders · Publieksversie 1.1 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders · Publieksversie 1.2 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )
