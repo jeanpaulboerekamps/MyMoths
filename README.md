@@ -1,4 +1,10 @@
-# Mijn Nachtvlinders — publieksversie 1.2
+# Mijn Nachtvlinders — publieksversie 1.3
+
+## Nieuw in 1.3
+
+- De kopfoto is compacter, zodat de bediening sneller in beeld komt.
+- Een tweede vlinderfoto is subtiel als achtergrond over de pagina verwerkt.
+- De technische regels met namen van geüploade gebieds- en ButterflyCount-bestanden zijn verborgen; de bestanden blijven wel actief.
 
 ## Nieuw in 1.2
 

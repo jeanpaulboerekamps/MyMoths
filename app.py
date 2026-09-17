@@ -27,12 +27,17 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown("""
+assets_dir = Path(__file__).with_name("assets")
+hero_data = base64.b64encode((assets_dir / "header-moth.jpeg").read_bytes()).decode("ascii")
+background_data = base64.b64encode((assets_dir / "page-background.jpeg").read_bytes()).decode("ascii")
+
+page_css = """
 <style>
 .stApp {
     background:
-      radial-gradient(circle at 8% 0%, rgba(111,66,166,.09), transparent 28rem),
-      linear-gradient(180deg,#faf9fc 0%,#f4f2f7 100%);
+      radial-gradient(circle at 8% 0%, rgba(111,66,166,.08), transparent 28rem),
+      linear-gradient(180deg,rgba(250,249,252,.94) 0%,rgba(244,242,247,.95) 100%),
+      url('data:image/jpeg;base64,__BACKGROUND_DATA__') center 36% / cover fixed no-repeat;
 }
 .block-container {padding-top: 1.25rem; padding-bottom: 4rem; max-width: 1240px;}
 div.stButton > button, div.stDownloadButton > button {
@@ -58,9 +63,9 @@ div.stButton > button:hover, div.stDownloadButton > button:hover {
     margin:.25rem 0 1rem 0;
 }
 .moth-hero {
-    min-height:300px; border-radius:28px; padding:2rem 2.2rem;
+    min-height:220px; border-radius:26px; padding:1.65rem 2rem;
     display:flex; flex-direction:column; justify-content:flex-end; overflow:hidden;
-    background-size:cover; background-position:center 48%;
+    background-size:cover; background-position:center 46%;
     box-shadow:0 20px 55px rgba(38,24,55,.18); margin-bottom:1.35rem;
 }
 .moth-hero h1 {
@@ -79,6 +84,7 @@ div.stButton > button:hover, div.stDownloadButton > button:hover {
 [data-testid="stFileUploaderDropzone"] {
     border-radius:18px; border-color:rgba(111,66,166,.22); background:rgba(255,255,255,.72);
 }
+[data-testid="stFileUploaderFile"] {display:none !important;}
 div[data-testid="stCheckbox"] label {
     padding:.35rem .15rem; font-weight:600;
 }
@@ -92,19 +98,19 @@ div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="s
 }
 @media (max-width: 768px) {
   .block-container {padding-left: .8rem; padding-right: .8rem;}
-  .moth-hero {min-height:235px; padding:1.4rem; border-radius:22px;}
+  .moth-hero {min-height:185px; padding:1.25rem; border-radius:22px;}
+  .moth-hero h1 {font-size:2.35rem;}
 }
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(page_css.replace("__BACKGROUND_DATA__", background_data), unsafe_allow_html=True)
 
-hero_path = Path(__file__).with_name("assets") / "header-moth.jpeg"
-hero_data = base64.b64encode(hero_path.read_bytes()).decode("ascii")
 st.markdown(
     f"""
     <section class="moth-hero" style="background-image:
       linear-gradient(90deg,rgba(22,15,29,.82) 0%,rgba(42,25,57,.54) 48%,rgba(20,14,24,.22) 100%),
       url('data:image/jpeg;base64,{hero_data}')">
-      <div><span class="release-badge">Publieksversie 1.2 · Nachtvlinderanalyse</span></div>
+      <div><span class="release-badge">Publieksversie 1.3 · Nachtvlinderanalyse</span></div>
       <h1>Mijn Nachtvlinders</h1>
       <p>Kies een gebied en ontdek direct wat je nachtvlinderval heeft opgeleverd.</p>
     </section>
@@ -1097,7 +1103,7 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders · Publieksversie 1.2 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders · Publieksversie 1.3 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )
