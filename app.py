@@ -3,6 +3,7 @@ import html
 import io
 import json
 import math
+from pathlib import Path
 import time
 import zipfile
 
@@ -11,6 +12,7 @@ import requests
 import folium
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from folium.plugins import Draw, HeatMap
 from shapely.geometry import Point, shape
@@ -55,7 +57,7 @@ div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="s
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Publieksversie 1.0 · Nachtvlinderanalyse</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Publieksversie 1.1 · Nachtvlinderanalyse</span>', unsafe_allow_html=True)
 st.title("🦋 Mijn Nachtvlinders")
 st.caption(
     "Kies een gebied en ontdek direct wat je nachtvlinderval heeft opgeleverd."
@@ -63,8 +65,23 @@ st.caption(
 
 if "areas" not in st.session_state:
     st.session_state.areas = {}
+    default_areas_path = Path(__file__).with_name("mijn_nachtvlindergebieden.geojson")
+    if default_areas_path.exists():
+        try:
+            default_areas = json.loads(default_areas_path.read_text(encoding="utf-8"))
+            features = (
+                default_areas.get("features", [])
+                if default_areas.get("type") == "FeatureCollection"
+                else [default_areas]
+            )
+            for index, feature in enumerate(features, 1):
+                if feature.get("geometry"):
+                    name = (feature.get("properties") or {}).get("name") or f"Gebied {index}"
+                    st.session_state.areas[name] = feature["geometry"]
+        except Exception:
+            pass
 if "active_area" not in st.session_state:
-    st.session_state.active_area = None
+    st.session_state.active_area = next(iter(st.session_state.areas), None)
 if "occ_df" not in st.session_state:
     st.session_state.occ_df = None
 if "sample_df" not in st.session_state:
@@ -95,14 +112,17 @@ def parse_coord(v):
     except Exception:
         return None
 
-def read_zipped_csv(upload):
-    data = upload.getvalue()
+@st.cache_data(show_spinner=False, max_entries=6)
+def read_zipped_csv_bytes(data):
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         csvs = [n for n in z.namelist() if n.lower().endswith(".csv")]
         if not csvs:
             raise ValueError("Geen CSV-bestand gevonden in ZIP.")
         with z.open(csvs[0]) as f:
             return pd.read_csv(f)
+
+def read_zipped_csv(upload):
+    return read_zipped_csv_bytes(upload.getvalue())
 
 def classify_file(df):
     cols = set(df.columns)
@@ -323,6 +343,24 @@ def target_species_from_inat(results, geom, radius_km, butterflycount_seen):
     )
     return summary
 
+def load_private_butterflycount_data():
+    """Laad optionele vaste exports; uitsluitend bedoeld voor een privé-installatie."""
+    data_dir = Path(__file__).with_name("private_data")
+    if not data_dir.is_dir():
+        return
+    for zip_path in sorted(data_dir.glob("*.zip")):
+        try:
+            df = read_zipped_csv_bytes(zip_path.read_bytes())
+            kind = classify_file(df)
+            if kind == "occurrences" and st.session_state.occ_df is None:
+                st.session_state.occ_df = prep_occ(df)
+            elif kind == "samples" and st.session_state.sample_df is None:
+                st.session_state.sample_df = prep_samples(df)
+        except Exception:
+            continue
+
+load_private_butterflycount_data()
+
 tab_area = st.container()
 tab_data = st.container()
 tab_dashboard = st.container()
@@ -510,6 +548,7 @@ with tab_dashboard:
             "Per maand",
             "Per jaar",
             "Vangst per telling",
+            "Beste metingen",
             "Heatmap",
             "Nieuwe soorten",
             "Target species",
@@ -603,6 +642,78 @@ with tab_dashboard:
         )
         st.plotly_chart(fig, width='stretch')
         st.dataframe(merged.sort_values("datum", ascending=False), width='stretch', hide_index=True)
+
+    if "Beste metingen" in selected_overviews:
+        st.subheader("Beste metingen")
+        st.caption(
+            "Metingen staan op aflopend aantal soorten. De paarse balk toont het aantal "
+            "soorten; de lijn toont het totale aantal individuen."
+        )
+        best_counts = (
+            occ.groupby("Sample ID")
+            .agg(individuen=("aantal", "sum"), soorten=("soort", "nunique"))
+            .reset_index()
+        )
+        sample_details = (
+            sam.sort_values("datum")
+            .drop_duplicates("Sample ID", keep="last")
+            [["Sample ID", "datum", "Location"]]
+        )
+        best = (
+            sample_details.merge(best_counts, on="Sample ID", how="left")
+            .fillna({"individuen": 0, "soorten": 0})
+            .sort_values(["soorten", "individuen", "datum"], ascending=[False, False, False])
+            .reset_index(drop=True)
+        )
+        best["soorten"] = best["soorten"].astype(int)
+        best["individuen"] = best["individuen"].astype(int)
+        best["meting"] = (
+            best["datum"].dt.strftime("%d-%m-%Y")
+            + " · " + best["Location"].fillna("Onbekende locatie").astype(str)
+            + " · " + best["Sample ID"].astype(str)
+        )
+
+        chart_best = best.head(30).copy()
+        fig_best = go.Figure()
+        fig_best.add_bar(
+            x=chart_best["meting"],
+            y=chart_best["soorten"],
+            name="Soorten",
+            marker_color="#6f42a6",
+            hovertemplate="%{x}<br><b>%{y} soorten</b><extra></extra>",
+        )
+        fig_best.add_scatter(
+            x=chart_best["meting"],
+            y=chart_best["individuen"],
+            name="Individuen",
+            mode="lines+markers",
+            yaxis="y2",
+            line={"color": "#ef6c00", "width": 3},
+            hovertemplate="%{x}<br><b>%{y} individuen</b><extra></extra>",
+        )
+        fig_best.update_layout(
+            xaxis={"title": "Meting", "tickangle": -45},
+            yaxis={"title": "Aantal soorten", "rangemode": "tozero"},
+            yaxis2={
+                "title": "Aantal individuen",
+                "overlaying": "y",
+                "side": "right",
+                "rangemode": "tozero",
+            },
+            legend={"orientation": "h", "y": 1.12},
+            margin={"b": 150},
+        )
+        st.plotly_chart(fig_best, width='stretch')
+
+        best_table = best[["datum", "Location", "soorten", "individuen"]].copy()
+        best_table["datum"] = best_table["datum"].dt.strftime("%d-%m-%Y")
+        best_table = best_table.rename(columns={
+            "datum": "Datum",
+            "Location": "Locatie",
+            "soorten": "Soorten",
+            "individuen": "Individuen",
+        })
+        st.dataframe(best_table, width='stretch', hide_index=True)
 
     if "Heatmap" in selected_overviews:
         st.subheader("Meetlocaties in het gebied")
@@ -934,7 +1045,7 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders · Publieksversie 1.0 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders · Publieksversie 1.1 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )

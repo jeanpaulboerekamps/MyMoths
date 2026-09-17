@@ -1,4 +1,13 @@
-# Mijn Nachtvlinders — publieksversie 1.0
+# Mijn Nachtvlinders — publieksversie 1.1
+
+## Nieuw in 1.1
+
+- Het meegeleverde `mijn_nachtvlindergebieden.geojson` wordt bij een nieuwe sessie automatisch geladen.
+- Geüploade ZIP-bestanden worden gecachet en niet bij iedere dashboardkeuze opnieuw verwerkt.
+- Nieuw overzicht **Beste metingen**, aflopend op aantal soorten, met een gecombineerde grafiek voor soorten en individuen.
+- Optioneel kunnen de twee ButterflyCount-ZIP's automatisch worden geladen uit `private_data/`.
+
+> Plaats persoonlijke exports alleen in `private_data/` bij een lokale installatie of een privé-repository. In een publieke GitHub-repository zijn deze bestanden voor anderen zichtbaar.
 
 ## Nieuwe opzet
 
