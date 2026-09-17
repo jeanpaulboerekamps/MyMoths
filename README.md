@@ -1,4 +1,14 @@
-# Mijn Nachtvlinders — prototype v0.3
+# Mijn Nachtvlinders — publieksversie 1.0
+
+## Nieuwe opzet
+
+- Eén doorlopende pagina zonder losse tabbladen.
+- Een bestaand GeoJSON-gebied wordt bovenaan gekozen; de tekenkaart opent alleen op verzoek.
+- Occurrences- en samples-ZIP-bestanden worden op dezelfde pagina geladen.
+- Periode en negen analyse-overzichten staan direct zichtbaar.
+- Meerdere overzichten kunnen tegelijk worden geselecteerd.
+- De analyse start na de keuze; targetsoorten worden automatisch vernieuwd.
+- Uitleg en privacy staan onderaan.
 
 Nieuw:
 - overzicht **🎯 Target species**;

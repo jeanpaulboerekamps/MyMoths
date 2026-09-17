@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import html
 import io
 import json
 import math
@@ -36,16 +37,28 @@ div.stButton > button, div.stDownloadButton > button {
     display:inline-block; padding:.25rem .65rem; border-radius:999px;
     background:rgba(92,51,145,.12); font-weight:700; margin-bottom:.6rem;
 }
+.active-area {
+    padding:.7rem .9rem; border-radius:14px; background:rgba(92,51,145,.08);
+    border-left:4px solid #6f42a6; margin:.2rem 0 .8rem 0;
+}
+div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="stFileUploaderDropzone"] {
+    padding:.15rem 0; border:0; background:transparent;
+}
+div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="stFileUploaderDropzoneInstructions"] {display:none;}
+div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="stFileUploaderDropzone"] button {font-size:0;}
+div[data-testid="stFileUploader"]:has(input[accept*=".geojson"]) [data-testid="stFileUploaderDropzone"] button::after {
+    content:"Kies gebied"; font-size:1rem;
+}
 @media (max-width: 768px) {
   .block-container {padding-left: .8rem; padding-right: .8rem;}
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<span class="release-badge">Prototype v0.3.2 · Nachtvlinder targets</span>', unsafe_allow_html=True)
+st.markdown('<span class="release-badge">Publieksversie 1.0 · Nachtvlinderanalyse</span>', unsafe_allow_html=True)
 st.title("🦋 Mijn Nachtvlinders")
 st.caption(
-    "Analyseer moth-trap tellingen uit ButterflyCount/eBMS binnen je eigen getekende gebied."
+    "Kies een gebied en ontdek direct wat je nachtvlinderval heeft opgeleverd."
 )
 
 if "areas" not in st.session_state:
@@ -62,6 +75,14 @@ if "target_meta" not in st.session_state:
     st.session_state.target_meta = {}
 if "selected_targets" not in st.session_state:
     st.session_state.selected_targets = []
+if "show_area_creator" not in st.session_state:
+    st.session_state.show_area_creator = False
+if "show_help" not in st.session_state:
+    st.session_state.show_help = False
+if "show_privacy" not in st.session_state:
+    st.session_state.show_privacy = False
+if "target_key" not in st.session_state:
+    st.session_state.target_key = None
 
 def parse_coord(v):
     if pd.isna(v):
@@ -302,115 +323,116 @@ def target_species_from_inat(results, geom, radius_km, butterflycount_seen):
     )
     return summary
 
-tab_area, tab_data, tab_dashboard = st.tabs(["🗺️ Gebied", "📥 Data", "📊 Dashboard"])
+tab_area = st.container()
+tab_data = st.container()
+tab_dashboard = st.container()
 
 with tab_area:
-    st.subheader("Onderzoeksgebied")
+    area_pick, area_new = st.columns([3, 1])
+    with area_pick:
+        uploaded_geo = st.file_uploader(
+            "Selecteer gebied",
+            type=["geojson", "json"],
+            key="moth_area_upload_v10",
+        )
+    with area_new:
+        st.write("")
+        if st.button("➕ Nieuw gebied maken", key="new_moth_area_v10"):
+            st.session_state.show_area_creator = not st.session_state.show_area_creator
+
+    if uploaded_geo:
+        upload_key = (uploaded_geo.name, uploaded_geo.size)
+        if st.session_state.get("last_moth_area_upload") != upload_key:
+            try:
+                obj = json.loads(uploaded_geo.getvalue().decode("utf-8"))
+                features = obj.get("features", []) if obj.get("type") == "FeatureCollection" else [obj]
+                first_name = None
+                for i, feat in enumerate(features, 1):
+                    if feat.get("geometry"):
+                        name = (feat.get("properties") or {}).get("name") or f"Gebied {i}"
+                        st.session_state.areas[name] = feat["geometry"]
+                        first_name = first_name or name
+                if first_name:
+                    st.session_state.active_area = first_name
+                    st.session_state.last_moth_area_upload = upload_key
+                    st.rerun()
+            except Exception as e:
+                st.error(f"GeoJSON kon niet worden geopend: {e}")
 
     if st.session_state.areas:
         names = list(st.session_state.areas)
-        current = st.session_state.active_area if st.session_state.active_area in names else None
-        idx = names.index(current) + 1 if current else 0
-        chosen = st.selectbox("Opgeslagen gebieden", ["— kies —"] + names, index=idx)
-        if chosen != "— kies —" and st.button("📂 Gebied openen", type="primary"):
-            st.session_state.active_area = chosen
-            st.rerun()
+        current = st.session_state.active_area if st.session_state.active_area in names else names[0]
+        if len(names) > 1:
+            chosen = st.selectbox("Actief gebied", names, index=names.index(current))
+            if chosen != st.session_state.active_area:
+                st.session_state.active_area = chosen
+                st.rerun()
+        elif st.session_state.active_area:
+            st.markdown(
+                f'<div class="active-area"><b>Actief gebied:</b> {html.escape(st.session_state.active_area)}</div>',
+                unsafe_allow_html=True,
+            )
 
-    uploaded_geo = st.file_uploader("Open opgeslagen GeoJSON", type=["geojson", "json"])
-    if uploaded_geo:
-        try:
-            obj = json.loads(uploaded_geo.getvalue().decode("utf-8"))
-            features = obj.get("features", []) if obj.get("type") == "FeatureCollection" else [obj]
-            for i, feat in enumerate(features, 1):
-                if feat.get("geometry"):
-                    name = (feat.get("properties") or {}).get("name") or f"Gebied {i}"
-                    st.session_state.areas[name] = feat["geometry"]
-                    st.session_state.active_area = name
-            st.success("Gebied(en) ingelezen.")
-        except Exception as e:
-            st.error(f"GeoJSON kon niet worden geopend: {e}")
+    if st.session_state.show_area_creator:
+        with st.container(border=True):
+            st.subheader("Nieuw gebied maken")
+            area_name = st.text_input("Naam van het gebied", placeholder="Bijvoorbeeld: Mijn tuin")
+            center = [52.0, 5.0]
+            zoom = 8
+            if st.session_state.active_area in st.session_state.areas:
+                p = shape(st.session_state.areas[st.session_state.active_area])
+                c = p.centroid
+                center, zoom = [c.y, c.x], 17
 
-    area_name = st.text_input("Naam nieuw gebied", placeholder="Bijvoorbeeld: Mijn tuin")
-
-    center = [52.0, 5.0]
-    zoom = 8
-    if st.session_state.active_area in st.session_state.areas:
-        p = shape(st.session_state.areas[st.session_state.active_area])
-        c = p.centroid
-        center, zoom = [c.y, c.x], 17
-
-    m = folium.Map(location=center, zoom_start=zoom, tiles="OpenStreetMap", control_scale=True)
-    if st.session_state.active_area in st.session_state.areas:
-        folium.GeoJson(st.session_state.areas[st.session_state.active_area]).add_to(m)
-
-    Draw(
-        export=False,
-        draw_options={
-            "polyline": False, "circle": False, "circlemarker": False, "marker": False,
-            "polygon": {"allowIntersection": False, "showArea": True},
-            "rectangle": True,
-        },
-        edit_options={"edit": True, "remove": True},
-    ).add_to(m)
-
-    state = st_folium(m, height=540, width='stretch', key="moth_area_map")
-    drawings = state.get("all_drawings") or []
-    newest = drawings[-1].get("geometry") if drawings else None
-
-    if st.button("💾 Gebied bewaren"):
-        if not area_name.strip():
-            st.error("Geef het gebied een naam.")
-        elif not newest:
-            st.error("Teken eerst een gebied.")
-        else:
-            st.session_state.areas[area_name.strip()] = newest
-            st.session_state.active_area = area_name.strip()
-            st.success("Gebied bewaard voor deze sessie.")
-
-    if st.session_state.areas:
-        export = json.dumps({
-            "type": "FeatureCollection",
-            "features": [
-                {"type": "Feature", "properties": {"name": n}, "geometry": g}
-                for n, g in st.session_state.areas.items()
-            ]
-        }, ensure_ascii=False, indent=2)
-
-        st.download_button(
-            "⬇️ Gebieden opslaan als GeoJSON",
-            export,
-            "mijn_nachtvlindergebieden.geojson",
-            "application/geo+json",
-        )
+            m = folium.Map(location=center, zoom_start=zoom, tiles="OpenStreetMap", control_scale=True)
+            if st.session_state.active_area in st.session_state.areas:
+                folium.GeoJson(st.session_state.areas[st.session_state.active_area]).add_to(m)
+            Draw(
+                export=False,
+                draw_options={
+                    "polyline": False, "circle": False, "circlemarker": False, "marker": False,
+                    "polygon": {"allowIntersection": False, "showArea": True}, "rectangle": True,
+                },
+                edit_options={"edit": True, "remove": True},
+            ).add_to(m)
+            state = st_folium(m, height=520, width='stretch', key="moth_area_map_v10")
+            drawings = state.get("all_drawings") or []
+            newest = drawings[-1].get("geometry") if drawings else None
+            if st.button("💾 Gebied gebruiken", type="primary"):
+                if not area_name.strip():
+                    st.error("Geef het gebied een naam.")
+                elif not newest:
+                    st.error("Teken eerst een gebied.")
+                else:
+                    st.session_state.areas[area_name.strip()] = newest
+                    st.session_state.active_area = area_name.strip()
+                    st.session_state.show_area_creator = False
+                    st.rerun()
 
 with tab_data:
-    st.subheader("ButterflyCount moth-trap data")
-    st.write(
-        "Upload de twee ZIP-bestanden uit **Moth trap downloads**: "
-        "**occurrences** en **samples**. De app herkent automatisch welk bestand welk type is."
-    )
-
     uploads = st.file_uploader(
-        "Upload moth-trap ZIP-bestanden",
+        "ButterflyCount-bestanden (occurrences en samples)",
         type=["zip"],
         accept_multiple_files=True,
+        help="Selecteer de twee ZIP-bestanden uit Moth trap downloads.",
     )
 
     if uploads:
-        for up in uploads:
-            try:
-                df = read_zipped_csv(up)
-                kind = classify_file(df)
-                if kind == "occurrences":
-                    st.session_state.occ_df = prep_occ(df)
-                    st.success(f"Occurrences geladen: {len(df):,} regels")
-                elif kind == "samples":
-                    st.session_state.sample_df = prep_samples(df)
-                    st.success(f"Samples geladen: {len(df):,} tellingen")
-                else:
-                    st.warning(f"{up.name}: bestandstype niet herkend.")
-            except Exception as e:
-                st.error(f"{up.name}: {e}")
+        data_upload_key = tuple((up.name, up.size) for up in uploads)
+        if st.session_state.get("last_moth_data_upload") != data_upload_key:
+            for up in uploads:
+                try:
+                    df = read_zipped_csv(up)
+                    kind = classify_file(df)
+                    if kind == "occurrences":
+                        st.session_state.occ_df = prep_occ(df)
+                    elif kind == "samples":
+                        st.session_state.sample_df = prep_samples(df)
+                    else:
+                        st.warning(f"{up.name}: bestandstype niet herkend.")
+                except Exception as e:
+                    st.error(f"{up.name}: {e}")
+            st.session_state.last_moth_data_upload = data_upload_key
 
     if st.session_state.occ_df is not None:
         occ = st.session_state.occ_df
@@ -481,9 +503,7 @@ with tab_dashboard:
             & (sam["datum"].dt.date <= end_date)
         ]
 
-    overview = st.selectbox(
-        "Kies overzicht",
-        [
+    overview_options = [
             "Samenvatting",
             "Soorten",
             "Families",
@@ -492,9 +512,20 @@ with tab_dashboard:
             "Vangst per telling",
             "Heatmap",
             "Nieuwe soorten",
-            "🎯 Target species",
+            "Target species",
         ]
-    )
+    selected_overviews = []
+    overview_columns = st.columns(3)
+    for index, option in enumerate(overview_options):
+        if overview_columns[index % 3].checkbox(
+            option,
+            value=False,
+            key=f"moth_overview_v10_{index}",
+        ):
+            selected_overviews.append(option)
+
+    if not selected_overviews:
+        st.info("Kies hierboven een of meer overzichten.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Tellingen", sam["Sample ID"].nunique())
@@ -502,7 +533,7 @@ with tab_dashboard:
     c3.metric("Individuen", int(occ["aantal"].sum()))
     c4.metric("Families", occ["familie"].nunique())
 
-    if overview == "Samenvatting":
+    if "Samenvatting" in selected_overviews:
         st.subheader("Samenvatting")
         st.write(
             f"In dit gebied zijn **{sam['Sample ID'].nunique()} moth-trap tellingen** "
@@ -516,7 +547,7 @@ with tab_dashboard:
         )
         st.dataframe(top, width='stretch', hide_index=True)
 
-    elif overview == "Soorten":
+    if "Soorten" in selected_overviews:
         st.subheader("Meest gevangen soorten")
         sp = (
             occ.groupby("soort")["aantal"].sum()
@@ -528,13 +559,13 @@ with tab_dashboard:
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, width='stretch')
 
-    elif overview == "Families":
+    if "Families" in selected_overviews:
         st.subheader("Verdeling over families")
         fam = occ.groupby("familie")["aantal"].sum().sort_values(ascending=False).reset_index()
         fig = px.pie(fam, names="familie", values="aantal", hole=.35)
         st.plotly_chart(fig, width='stretch')
 
-    elif overview == "Per maand":
+    if "Per maand" in selected_overviews:
         st.subheader("Gemiddeld per kalendermaand")
         monthly = (
             occ.groupby(["jaar", "maand"])
@@ -547,7 +578,7 @@ with tab_dashboard:
         fig = px.bar(avg, x="maandnaam", y=["individuen","soorten"], barmode="group")
         st.plotly_chart(fig, width='stretch')
 
-    elif overview == "Per jaar":
+    if "Per jaar" in selected_overviews:
         st.subheader("Ontwikkeling per jaar")
         yearly = (
             occ.groupby("jaar")
@@ -557,7 +588,7 @@ with tab_dashboard:
         fig = px.bar(yearly, x="jaar", y=["individuen","soorten"], barmode="group")
         st.plotly_chart(fig, width='stretch')
 
-    elif overview == "Vangst per telling":
+    if "Vangst per telling" in selected_overviews:
         st.subheader("Vangst per moth-trap telling")
         by_sample = (
             occ.groupby("Sample ID")
@@ -573,7 +604,7 @@ with tab_dashboard:
         st.plotly_chart(fig, width='stretch')
         st.dataframe(merged.sort_values("datum", ascending=False), width='stretch', hide_index=True)
 
-    elif overview == "Heatmap":
+    if "Heatmap" in selected_overviews:
         st.subheader("Meetlocaties in het gebied")
         st.caption(
             "De kaart toont de vaste moth-trap locaties binnen het getekende gebied. "
@@ -670,7 +701,7 @@ with tab_dashboard:
         else:
             st.info("Geen meetlocaties gevonden binnen dit gebied en deze periode.")
 
-    elif overview == "Nieuwe soorten":
+    if "Nieuwe soorten" in selected_overviews:
         st.subheader("Nieuwe soorten door de tijd")
         first = (
             occ.sort_values("datum")
@@ -686,7 +717,7 @@ with tab_dashboard:
         st.dataframe(first, width='stretch', hide_index=True)
 
 
-    elif overview == "🎯 Target species":
+    if "Target species" in selected_overviews:
         st.subheader("🎯 Target species")
         st.write(
             "Zoek naar **nachtvlinders (Lepidoptera zonder Papilionoidea) die nog niet in jouw ButterflyCount-data "
@@ -725,7 +756,14 @@ with tab_dashboard:
             "meteen als target verschijnt."
         )
 
-        if st.button("🔎 Zoek target species", type="primary"):
+        target_key = (
+            st.session_state.active_area,
+            int(target_radius),
+            int(lookback_years),
+            int(min_nearby),
+            bool(research_only),
+        )
+        if st.session_state.target_key != target_key:
             bbox = expanded_bbox(geom, target_radius)
             d2_inat = date.today()
             d1_inat = d2_inat - timedelta(days=365 * lookback_years)
@@ -763,6 +801,7 @@ with tab_dashboard:
                         "seen_inside": len(seen_species),
                     }
                     st.session_state.selected_targets = []
+                    st.session_state.target_key = target_key
                 except Exception as e:
                     st.error(f"Target species konden niet worden opgehaald: {e}")
 
@@ -770,7 +809,7 @@ with tab_dashboard:
         meta = st.session_state.target_meta or {}
 
         if target_df is None:
-            st.info("Kies de instellingen en tik op **Zoek target species**.")
+            st.info("De targetsoorten worden automatisch opgehaald.")
         else:
             shown = target_df[target_df["waarnemingen"] >= min_nearby].copy()
 
@@ -895,7 +934,27 @@ with tab_dashboard:
 
 st.divider()
 st.caption(
-    "Mijn Nachtvlinders v0.3.2 · ButterflyCount/eBMS moth-trap exports · "
+    "Mijn Nachtvlinders · Publieksversie 1.0 · ButterflyCount/eBMS moth-trap exports · "
     "gegevens worden lokaal in de actieve Streamlit-sessie verwerkt. "
 "Target species gebruikt de openbare iNaturalist API."
 )
+
+bottom_a, bottom_b = st.columns(2)
+if bottom_a.button("ℹ️ Hoe werkt deze app?", key="moth_help_bottom"):
+    st.session_state.show_help = not st.session_state.show_help
+if bottom_b.button("🔒 Privacy & gegevens", key="moth_privacy_bottom"):
+    st.session_state.show_privacy = not st.session_state.show_privacy
+
+if st.session_state.show_help:
+    st.info(
+        "Kies bovenaan je gebied en upload daarna de occurrences- en samples-ZIP uit "
+        "ButterflyCount. Stel de periode in en selecteer een of meer overzichten. "
+        "De berekeningen starten direct; targetsoorten worden via iNaturalist opgehaald."
+    )
+
+if st.session_state.show_privacy:
+    st.info(
+        "De geüploade ButterflyCount-bestanden worden alleen in de actieve Streamlit-sessie "
+        "verwerkt. De app vraagt niet om een account of wachtwoord. Alleen voor targetsoorten "
+        "worden openbare gegevens bij de iNaturalist API opgehaald."
+    )
